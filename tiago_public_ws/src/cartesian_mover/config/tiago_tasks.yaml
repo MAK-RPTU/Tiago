@@ -1,0 +1,24 @@
+task1:
+  lift_torso:
+    group: arm_torso
+    joints: [0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  move_arm:
+    group: arm
+    joints: [1.5708, -0.2618, 0.0, 0.6981, 0.0, 0.0, 0.0]
+  open_gripper:
+    group: gripper
+    joints: [0.2, 0.2]
+  close_gripper:
+    group: gripper
+    joints: [0.1, 0.1]
+
+task2:
+  move_arm:
+    group: arm
+    joints: [0.0, 0.0, 0.0, 0.6981, 0.0, 0.0, 0.0]
+  lift_torso:
+    group: arm_torso
+    joints: [0.0, 0.0, 0.0, 0.0, 0.6981, 0.0, 0.0, 0.0]
+  move_arm:
+    group: arm
+    joints: [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

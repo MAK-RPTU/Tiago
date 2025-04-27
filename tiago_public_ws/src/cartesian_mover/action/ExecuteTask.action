@@ -1,0 +1,9 @@
+# Request
+string go_to
+---
+# Result
+bool success
+string message
+---
+# Feedback
+string feedback
