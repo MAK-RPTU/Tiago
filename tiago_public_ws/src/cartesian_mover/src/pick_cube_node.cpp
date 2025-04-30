@@ -5,6 +5,8 @@
 #include <moveit_msgs/msg/robot_trajectory.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <thread>
+#include "attach_gazebo_interfaces/srv/attach_command.hpp"
+
 
 class TiagoPickPlace
 {
@@ -15,13 +17,67 @@ public:
     //   node_->declare_parameter("use_sim_time", true);
     // }
     move_group_arm_torso_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(node_, "arm_torso");
-    move_group_arm_torso_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(node_, "arm");
+    move_group_arm_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(node_, "arm");
     move_group_gripper_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(node_, "gripper");
 
     move_group_arm_torso_->setMaxVelocityScalingFactor(0.5);
     move_group_arm_torso_->setMaxAccelerationScalingFactor(0.5);
     move_group_arm_torso_->setPlanningTime(10.0);
   }
+
+  void callAttachService(const std::string &command)
+  {
+    auto client = node_->create_client<attach_gazebo_interfaces::srv::AttachCommand>("/attach_control");
+  
+    if (!client->wait_for_service(std::chrono::seconds(2)))
+    {
+      RCLCPP_ERROR(node_->get_logger(), "Attach service not available.");
+      return;
+    }
+  
+    auto request = std::make_shared<attach_gazebo_interfaces::srv::AttachCommand::Request>();
+    request->command = command;
+  
+    auto future = client->async_send_request(request);
+  
+    // Use the existing executor (no need to add the node again)
+  }
+  
+  
+
+
+  void addTableToPlanningScene()
+  {
+      moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
+      moveit_msgs::msg::CollisionObject collision_object;
+      collision_object.header.frame_id = move_group_arm_torso_->getPlanningFrame();
+
+      collision_object.id = "table1";
+
+      // Define table shape
+      shape_msgs::msg::SolidPrimitive table_primitive;
+      table_primitive.type = table_primitive.BOX;
+      table_primitive.dimensions.resize(3);
+      table_primitive.dimensions[0] = 1.0;   // X size (length)
+      table_primitive.dimensions[1] = 0.8;   // Y size (width)
+      table_primitive.dimensions[2] = 0.83;  // Z size (height)
+
+      // Define table pose
+      geometry_msgs::msg::Pose table_pose;
+      table_pose.orientation.w = 1.0;
+      table_pose.position.x = 0.88;
+      table_pose.position.y = 0.0;
+      table_pose.position.z = 0.83 - 0.83/2.0; // Center of box: table height - half table thickness
+      // table_pose.position.z = 0.0; // Center of box: table height - half table thickness
+      collision_object.primitives.push_back(table_primitive);
+      collision_object.primitive_poses.push_back(table_pose);
+      collision_object.operation = collision_object.ADD;
+
+      planning_scene_interface.applyCollisionObject(collision_object);
+
+      RCLCPP_INFO(node_->get_logger(), "Table added to planning scene!");
+  }
+
 
   void moveToHomePosition()
   {
@@ -42,35 +98,36 @@ public:
     executeMovement(*move_group_arm_torso_, "Moved to pregrasp position successfully.", "Failed to move to pregrasp position.");
   }
 
-  void safe_position(const std::vector<double>& joint_angles_in_degrees)
-{
-    if (joint_angles_in_degrees.size() != 7)
-    {
-        RCLCPP_ERROR(node_->get_logger(), "Input vector must have exactly 7 elements (for arm joints).");
-        return;
-    }
-
-    std::vector<double> target_joint_values;
-
-    // First element: fixed torso value (unchanged)
-    target_joint_values.push_back(0.34);
-
-    // Remaining 7 elements: convert degrees to radians
-    for (const auto& angle_deg : joint_angles_in_degrees)
-    {
-        double angle_rad = angle_deg * (M_PI / 180.0);
-        target_joint_values.push_back(angle_rad);
-    }
-
-    for (size_t i = 0; i < target_joint_values.size(); ++i)
-    {
-        RCLCPP_INFO(node_->get_logger(), "Joint[%zu]: %.4f rad", i, target_joint_values[i]);
-    }
-
-    move_group_arm_torso_->setJointValueTarget(target_joint_values);
-    executeMovement(*move_group_arm_torso_, "Moved to safe position successfully.", "Failed to move to safe position.");
-}
-
+  void safe_position(const std::vector<double>& joint_angles_input)
+  {
+      if (joint_angles_input.size() != 8)
+      {
+          RCLCPP_ERROR(node_->get_logger(), "Input vector must have exactly 8 elements (1 torso + 7 arm joints).");
+          return;
+      }
+  
+      std::vector<double> target_joint_values;
+  
+      // First element: fixed torso value (DO NOT convert)
+      target_joint_values.push_back(joint_angles_input[0]);  // Torso stays as meters
+  
+      // Remaining 7 elements: convert degrees to radians
+      for (size_t i = 1; i < joint_angles_input.size(); ++i)
+      {
+          double angle_deg = joint_angles_input[i];
+          double angle_rad = angle_deg * (M_PI / 180.0);
+          target_joint_values.push_back(angle_rad);
+      }
+  
+      for (size_t i = 0; i < target_joint_values.size(); ++i)
+      {
+          RCLCPP_INFO(node_->get_logger(), "Joint[%zu]: %.4f", i, target_joint_values[i]);
+      }
+  
+      move_group_arm_torso_->setJointValueTarget(target_joint_values);
+      executeMovement(*move_group_arm_torso_, "Moved to safe position successfully.", "Failed to move to safe position.");
+  }
+  
 
   void moveTograspPosition()
   {
@@ -162,11 +219,11 @@ public:
   
     if (action == "close")
     {
-      grip_positions = {0.02, 0.02};  // Closed
+      grip_positions = {0.023, 0.023};  // Closed
     }
     else if (action == "open")
     {
-      grip_positions = {0.04, 0.04};  // Opened
+      grip_positions = {0.043, 0.043};  // Opened
     }
     else
     {
@@ -202,9 +259,13 @@ public:
   void moveToPlacePosition()
   {
     geometry_msgs::msg::Pose target_pose;
-    target_pose.position.x = 0.4;
-    target_pose.position.y = -0.2;
-    target_pose.position.z = 0.3;
+    // target_pose.position.x = 0.4;
+    // target_pose.position.y = -0.2;
+    // target_pose.position.z = 0.3;
+    // target_pose.orientation.w = 1.0;
+    target_pose.position.x = 0.541;
+    target_pose.position.y = -0.260;
+    target_pose.position.z = 1.13;
     target_pose.orientation.w = 1.0;
 
     move_group_arm_torso_->setPoseTarget(target_pose);
@@ -254,22 +315,36 @@ int main(int argc, char **argv)
   executor.add_node(node);
   std::thread spinner([&executor]() { executor.spin(); });
 
+  // app->addTableToPlanningScene();
+
   app->moveToHomePosition();
   app->moveToPregraspPosition();
-  std::vector<double> joints_in_degrees = {22.0, 8.0, -122.0, 88.0, 84.0, -70.0, -54.0};
-
+  std::vector<double> joints_with_torso = {0.34, 22.0, 8.0, -122.0, 88.0, 84.0, -70.0, -54.0};
   // Call safe_position function
-  app->safe_position(joints_in_degrees);
+  app->safe_position(joints_with_torso);
 
-  app->moveTograspPosition();
-  app->rotate_ee(-M_PI / 2.0);
+  joints_with_torso = {0.213, 12.0, 26.0, -104.0, 102.0, 75.0, -64.0, -71.0};
+  // Call safe_position function
+  app->safe_position(joints_with_torso);
+
+  app->controlGripper("open");
+  // app->moveTograspPosition();
+  // app->rotate_ee(-M_PI / 2.0);
   // app->moveToPregraspPosition();
-  // app->approachObject(0.05);
+  app->approachObject(0.08);
   // app->controlGripper("close");
-  // app->retreatObject(0.1);
-  // app->moveToPlacePosition();
-  // app->controlGripper("open");
 
+  app->callAttachService("close");
+
+  app->retreatObject(0.08);
+  app->moveToPregraspPosition();
+
+  app->moveToPlacePosition();
+  app->rotate_ee(-M_PI / 2.0);
+  app->approachObject(0.05);
+  // app->controlGripper("open");
+  app->callAttachService("open");
+  
   rclcpp::shutdown();
   spinner.join();
   return 0;
